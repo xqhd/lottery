@@ -1,0 +1,30 @@
+{
+  "name": "lottery",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n SERVER,WEB -c green,cyan \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "npm run -w server dev",
+    "dev:web": "npm run -w web dev",
+    "build": "npm run -w server build && npm run -w web build",
+    "build:exe": "npm run build && pkg app.js -t node18-win-x64 -o lottery.exe",
+    "test": "npm run -w server test",
+    "lint": "npm run -w server lint && npm run -w web lint",
+    "typecheck": "npm run -w server typecheck && npm run -w web typecheck"
+  },
+  "pkg": {
+    "scripts": [
+      "server/dist/**/*.js"
+    ],
+    "assets": [
+      "web/dist/**/*",
+      "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+    ]
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
