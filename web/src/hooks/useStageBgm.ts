@@ -11,6 +11,8 @@ export type StageBgmUrls = {
 type Slot = 'ready' | 'rolling' | 'win'
 
 const FADE_MS = 650
+const PLAY_RETRY_DELAY_MS = 260
+const PLAY_RETRY_ATTEMPTS = 2
 const STORAGE_KEY = 'lottery_vol_bgm'
 const LEGACY_MASTER_KEY = 'stage_master_volume'
 
@@ -34,6 +36,79 @@ function readInitialVolume(): number {
     return clamp01(num)
   } catch {
     return 0.5
+  }
+}
+
+function parsePlayError(error: unknown): { name: string; message: string } {
+  if (error instanceof Error) return { name: error.name, message: error.message }
+  if (error && typeof error === 'object') {
+    const rec = error as { name?: unknown; message?: unknown }
+    const name = typeof rec.name === 'string' ? rec.name : 'UnknownError'
+    const message = typeof rec.message === 'string' ? rec.message : String(error)
+    return { name, message }
+  }
+  return { name: 'UnknownError', message: String(error) }
+}
+
+function waitForCanPlayOrTimeout(audio: HTMLAudioElement, timeoutMs = PLAY_RETRY_DELAY_MS): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      audio.removeEventListener('canplay', onCanPlay)
+      audio.removeEventListener('canplaythrough', onCanPlay)
+      window.clearTimeout(timer)
+      resolve()
+    }
+    const onCanPlay = () => finish()
+    const timer = window.setTimeout(() => finish(), timeoutMs)
+    audio.addEventListener('canplay', onCanPlay)
+    audio.addEventListener('canplaythrough', onCanPlay)
+    try {
+      if (audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) audio.load()
+    } catch {
+      // ignore
+    }
+  })
+}
+
+async function playWithRetry(audio: HTMLAudioElement, slot: Slot, state: StageBgmStatus): Promise<boolean> {
+  for (let attempt = 1; attempt <= PLAY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      await audio.play()
+      return true
+    } catch (error) {
+      const info = parsePlayError(error)
+      console.warn('[stage-audio] play failed', {
+        channel: 'BGM',
+        slot,
+        state,
+        attempt,
+        name: info.name,
+        message: info.message,
+      })
+      if (attempt >= PLAY_RETRY_ATTEMPTS) return false
+      await waitForCanPlayOrTimeout(audio)
+    }
+  }
+  return false
+}
+
+async function warmTrack(url: string, slot: Slot, state: StageBgmStatus): Promise<void> {
+  const audio = new Audio(url)
+  audio.preload = 'auto'
+  audio.loop = false
+  audio.volume = 0
+
+  try {
+    audio.load()
+    const ok = await playWithRetry(audio, slot, state)
+    if (!ok) return
+    audio.pause()
+    audio.currentTime = 0
+  } catch {
+    // ignore
   }
 }
 
@@ -136,7 +211,7 @@ export function useStageBgm(status: StageBgmStatus, enabled: boolean, urls: Stag
     (slot: Slot, url: string) => {
       const v = clamp01(bgmVolume)
       const audios = audiosRef.current
-      const target = ensureAudio(slot, url)
+      const targetAudio = ensureAudio(slot, url)
 
       const startTs = performance.now()
       const starts: Record<Slot, number> = {
@@ -148,20 +223,20 @@ export function useStageBgm(status: StageBgmStatus, enabled: boolean, urls: Stag
       ends[slot] = v
 
       // Start the next track quietly, then fade up.
-      void target.play().catch(() => {})
+      void playWithRetry(targetAudio, slot, status)
 
       stopFade()
       const tick = (ts: number) => {
-        const t = Math.min(1, (ts - startTs) / FADE_MS)
-        const k = t * (2 - t) // easeOutQuad
+        const progress = clamp01((ts - startTs) / FADE_MS)
+        const k = progress * (2 - progress) // easeOutQuad
         for (const s of Object.keys(audios) as Slot[]) {
           const a = audios[s]
           if (!a) continue
           const from = starts[s] ?? 0
           const to = ends[s] ?? 0
-          a.volume = from + (to - from) * k
+          a.volume = clamp01(from + (to - from) * k)
         }
-        if (t < 1) {
+        if (progress < 1) {
           fadeRafRef.current = requestAnimationFrame(tick)
           return
         }
@@ -185,43 +260,21 @@ export function useStageBgm(status: StageBgmStatus, enabled: boolean, urls: Stag
 
       fadeRafRef.current = requestAnimationFrame(tick)
     },
-    [bgmVolume, ensureAudio],
+    [bgmVolume, ensureAudio, status],
   )
 
   const unlockBgm = useCallback(() => {
     if (unlockedRef.current) return
     unlockedRef.current = true
+    setUnlocked(true)
 
-    const { slot, url, all } = target
-    const fallback = url || all.ready || all.rolling || all.win
-    const fallbackSlot: Slot = url
-      ? slot
-      : all.ready
-        ? 'ready'
-        : all.rolling
-          ? 'rolling'
-          : 'win'
-    if (!fallback) {
-      setUnlocked(true)
-      return
-    }
+    const warmTargets = (['ready', 'rolling', 'win'] as Slot[])
+      .map((slot) => ({ slot, url: target.all[slot] }))
+      .filter((item): item is { slot: Slot; url: string } => Boolean(item.url))
 
-    const a = ensureAudio(fallbackSlot, fallback)
-    const prev = a.volume
-    a.volume = 0
-    a.play()
-      .then(() => {
-        a.pause()
-        a.currentTime = 0
-      })
-      .catch(() => {
-        // ignore
-      })
-      .finally(() => {
-        a.volume = prev
-        setUnlocked(true)
-      })
-  }, [ensureAudio, target])
+    if (!warmTargets.length) return
+    void Promise.allSettled(warmTargets.map((item) => warmTrack(item.url, item.slot, status)))
+  }, [status, target.all])
 
   useEffect(() => {
     if (!enabled || !unlocked) {

@@ -35,6 +35,16 @@ npm run dev:web
 - 背景：在控制台上传活动背景（支持 `image/*` 与 `video/mp4`，上限 50MB；后端落盘到 `UPLOAD_DIR`，默认 `./uploads/`，通过 `/uploads/...` 访问）
 - 音效：把 `rolling.mp3` / `win.mp3` 放到 `web/public/assets/`；舞台页首次点击会解锁音频并尝试全屏，右上角可调音量
 
+### 舞台音频回归验证（3 轮）
+
+每次改动舞台音频逻辑后，至少执行以下 3 轮：
+
+1. 首轮进入：首次打开 `/stage/:eventId?control=1`，点击“准备就绪”后直接开始一轮抽奖，确认准备阶段（READY）、抽奖阶段（ROLLING）、颁奖阶段（REVEAL）都能触发对应音轨。
+2. 切奖项连续抽：在控制条切换不同奖项（例如三等奖→二等奖→一等奖），连续执行“开始→停止→下一轮”，确认多轮切换后音频不丢失。
+3. 弱网/慢加载：在浏览器 DevTools 将网络限速为 Slow 3G（或同级别），刷新舞台页后重复第 1 步，确认页面可恢复，音频不会因首次加载慢而永久静音。
+
+故障定位建议：打开浏览器控制台过滤 `stage-audio`，如播放失败会打印 `channel/slot/state/attempt/error.name/error.message`，并自动进行一次 `canplay + 短延时` 重试。
+
 ## 名单导入格式
 
 当前支持：`.xlsx/.xls` / `.csv` / `.txt`。

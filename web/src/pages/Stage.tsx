@@ -794,7 +794,7 @@ export function StagePage() {
           <div className="stage-overlay-inner">
             <div className="stage-overlay-title">准备就绪</div>
             <div className="stage-overlay-sub">
-              {controlMode ? '点击屏幕进入演示模式（鼠标移到底部可唤起控制栏）' : '点击任意处进入全屏舞台（解锁声音）'}
+              {controlMode ? '点击进入' : '点击任意处进入全屏舞台（解锁声音）'}
             </div>
           </div>
         </div>

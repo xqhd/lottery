@@ -30,3 +30,7 @@ server/uploads/
 *.zip
 release/
 out/
+
+
+.serena
+web/public
